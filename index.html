@@ -554,11 +554,10 @@ body {
  .progress-bar-wrap { width: 100px; }
 }
 
-  <!-- Firebase SDK -->
-  <script type="module">
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-    import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-
+  <!-- Firebase SDK (compat version - works everywhere) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+  <script>
     const firebaseConfig = {
       apiKey: "AIzaSyCWWMEtt73whpWWw7ntCpSrvzbqWSur1rQ",
       authDomain: "mundial-2026-19bac.firebaseapp.com",
@@ -568,43 +567,38 @@ body {
       appId: "1:617660876415:web:1dd0f54e41f35a05dbe14a"
     };
 
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
+    try {
+      firebase.initializeApp(firebaseConfig);
+      const db = firebase.firestore();
+      const STATE_DOC = db.collection('mundial2026').doc('state');
 
-    // ── FIRESTORE HELPERS ──────────────────────────────────────────
-    // Single document "state" stores the entire app state
-    const STATE_DOC = doc(db, 'mundial2026', 'state');
+      window._fbSave = async function(stateObj) {
+        try {
+          const clean = JSON.parse(JSON.stringify(stateObj));
+          await STATE_DOC.set(clean);
+        } catch(e) { console.error('Firebase save error:', e); }
+      };
 
-    window._fbSave = async function(stateObj) {
-      try {
-        // Firestore doesn't support undefined values — clean first
-        const clean = JSON.parse(JSON.stringify(stateObj));
-        await setDoc(STATE_DOC, clean);
-      } catch(e) {
-        console.error('Firebase save error:', e);
-      }
-    };
+      window._fbLoad = async function() {
+        try {
+          const snap = await STATE_DOC.get();
+          return snap.exists ? snap.data() : null;
+        } catch(e) { console.error('Firebase load error:', e); return null; }
+      };
 
-    window._fbLoad = async function() {
-      try {
-        const snap = await getDoc(STATE_DOC);
-        return snap.exists() ? snap.data() : null;
-      } catch(e) {
-        console.error('Firebase load error:', e);
-        return null;
-      }
-    };
+      window._fbListen = function(callback) {
+        return STATE_DOC.onSnapshot((snap) => {
+          if (snap.exists) callback(snap.data());
+        });
+      };
 
-    // Real-time listener — updates UI when another user changes data
-    window._fbListen = function(callback) {
-      return onSnapshot(STATE_DOC, (snap) => {
-        if (snap.exists()) callback(snap.data());
-      });
-    };
-
-    // Signal that Firebase is ready
-    window._fbReady = true;
-    if (window._fbReadyCallback) window._fbReadyCallback();
+      window._fbReady = true;
+      if (window._fbReadyCallback) window._fbReadyCallback();
+    } catch(e) {
+      console.error('Firebase init error:', e);
+      window._fbReady = true; // fallback: continue without Firebase
+      if (window._fbReadyCallback) window._fbReadyCallback();
+    }
   </script>
 </style>
 </head>
