@@ -553,6 +553,59 @@ body {
  .ranking-podio { grid-template-columns: 1fr; }
  .progress-bar-wrap { width: 100px; }
 }
+
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+    import { getFirestore, doc, setDoc, getDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyCWWMEtt73whpWWw7ntCpSrvzbqWSur1rQ",
+      authDomain: "mundial-2026-19bac.firebaseapp.com",
+      projectId: "mundial-2026-19bac",
+      storageBucket: "mundial-2026-19bac.firebasestorage.app",
+      messagingSenderId: "617660876415",
+      appId: "1:617660876415:web:1dd0f54e41f35a05dbe14a"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    // ── FIRESTORE HELPERS ──────────────────────────────────────────
+    // Single document "state" stores the entire app state
+    const STATE_DOC = doc(db, 'mundial2026', 'state');
+
+    window._fbSave = async function(stateObj) {
+      try {
+        // Firestore doesn't support undefined values — clean first
+        const clean = JSON.parse(JSON.stringify(stateObj));
+        await setDoc(STATE_DOC, clean);
+      } catch(e) {
+        console.error('Firebase save error:', e);
+      }
+    };
+
+    window._fbLoad = async function() {
+      try {
+        const snap = await getDoc(STATE_DOC);
+        return snap.exists() ? snap.data() : null;
+      } catch(e) {
+        console.error('Firebase load error:', e);
+        return null;
+      }
+    };
+
+    // Real-time listener — updates UI when another user changes data
+    window._fbListen = function(callback) {
+      return onSnapshot(STATE_DOC, (snap) => {
+        if (snap.exists()) callback(snap.data());
+      });
+    };
+
+    // Signal that Firebase is ready
+    window._fbReady = true;
+    if (window._fbReadyCallback) window._fbReadyCallback();
+  </script>
 </style>
 </head>
 <body>
@@ -560,7 +613,7 @@ body {
 <div id="loading-screen">
  <div class="loading-colorbar"><div class="loading-colorbar-inner"></div></div>
  <div class="loading-title">Mundial <span>2026</span></div>
- <div class="loading-sub">Polla mundialista</div>
+ <div class="loading-sub">Conectando a la nube...</div>
 </div>
 <div id="toast"></div>
 
@@ -686,6 +739,7 @@ body {
  <button onclick="showSection('fase-final')" id="nav-fase-final">🥇 Final<span class="lock-icon" id="lock-final">🔒</span></button>
  <button onclick="showSection('ranking')" id="nav-ranking">📊 Ranking</button>
  <button onclick="requestAdmin()" id="nav-admin" style="border-color:rgba(220,80,80,0.5);color:rgba(255,120,120,0.9)">🔐 Admin</button>
+ <span id="sync-indicator" style="font-size:11px;color:#4ade80;font-weight:700;padding:4px 8px;opacity:0;transition:opacity 0.4s">☁️ Guardado</span>
 </div>
 
 <div class="active-user-bar" id="active-user-bar" style="display:none">
@@ -863,10 +917,59 @@ let state = {
  currentUserId: null
 };
 
-function saveState() { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+// ── STORAGE: Firebase + localStorage fallback ──────────────────
+function saveState() {
+ localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+ if (window._fbSave) {
+ window._fbSave(state);
+ showSyncIndicator();
+ }
+}
+
 function loadState() {
  const raw = localStorage.getItem(STORAGE_KEY);
- if (raw) { const s = JSON.parse(raw); state = {...state, ...s}; state.adminUnlocked = false; }
+ if (raw) { try { const s = JSON.parse(raw); state = {...state, ...s}; state.adminUnlocked = false; } catch(e) {} }
+}
+
+async function loadStateFromFirebase() {
+ if (!window._fbLoad) return;
+ try {
+ const remote = await window._fbLoad();
+ if (remote) {
+ const adminWas = state.adminUnlocked;
+ const userWas = state.currentUserId;
+ const sectionWas = state.currentSection;
+ state = { ...state, ...remote };
+ state.adminUnlocked = adminWas;
+ state.currentUserId = userWas;
+ state.currentSection = sectionWas;
+ localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+ }
+ } catch(e) { console.error('Firebase load error:', e); }
+}
+
+function showSyncIndicator() {
+ const el = document.getElementById('sync-indicator');
+ if (!el) return;
+ el.style.opacity = '1';
+ clearTimeout(el._timer);
+ el._timer = setTimeout(() => { el.style.opacity = '0'; }, 1500);
+}
+
+function startRealtimeSync() {
+ if (!window._fbListen) return;
+ window._fbListen((remoteState) => {
+ const adminWas = state.adminUnlocked;
+ const userWas = state.currentUserId;
+ const sectionWas = state.currentSection;
+ state = { ...state, ...remoteState };
+ state.adminUnlocked = adminWas;
+ state.currentUserId = userWas;
+ state.currentSection = sectionWas;
+ localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+ updateLockIcons();
+ renderSection();
+ });
 }
 
 function toast(msg, dur=2800) {
@@ -2143,13 +2246,37 @@ function confirmClearFaseGlobal(fase) {
 
 // ======= INIT =======
 window.onload = function() {
- loadState(); updateLockIcons();
- setTimeout(() => {
+ loadState(); // load localStorage instantly (fast)
+ updateLockIcons();
+
+ const initApp = async () => {
+ // Load from Firebase (authoritative)
+ await loadStateFromFirebase();
+ updateLockIcons();
+ // Start real-time listener
+ startRealtimeSync();
+ // Hide loading screen
  const ls = document.getElementById('loading-screen');
  ls.style.opacity = '0';
  setTimeout(() => ls.style.display = 'none', 400);
  showSection('registro');
- }, 1200);
+ };
+
+ // Wait for Firebase to be ready
+ if (window._fbReady) {
+ initApp();
+ } else {
+ window._fbReadyCallback = initApp;
+ // Fallback: if Firebase takes too long, load anyway after 3s
+ setTimeout(() => {
+ if (!window._fbReady) {
+ const ls = document.getElementById('loading-screen');
+ ls.style.opacity = '0';
+ setTimeout(() => ls.style.display = 'none', 400);
+ showSection('registro');
+ }
+ }, 3000);
+ }
 };
 </script>
 </body>
